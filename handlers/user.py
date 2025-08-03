@@ -1,4 +1,3 @@
-# handlers/user.py
 from aiogram import Router, types, Bot, F
 from aiogram.filters import Command
 from excel_utils import (
@@ -6,7 +5,7 @@ from excel_utils import (
     update_status, update_score, get_question_data,
     set_start_time, set_end_time, get_status
 )
-from config import excel_lock, SKIP_PENALTY
+from config import excel_lock, SKIP_PENALTY, ADMIN_IDS
 from keyboards import question_keyboard
 from state_manager import (
     init_player_state, get_state, set_message_id,
@@ -15,34 +14,8 @@ from state_manager import (
 
 router = Router()
 
-# ✅ Хранилище для флагов регистрации
+# ✅ Хранилище для регистрации
 waiting_for_team_name = set()
-
-@router.message(Command("help"))
-async def cmd_help(message: types.Message):
-    user_id = message.from_user.id
-
-    # ✅ Базовый набор команд
-    text = "📋 *Доступные команды:*\n\n"
-    text += "👤 *Для игроков:*\n"
-    text += "/start — Начать работу с ботом\n"
-    text += "/register — Зарегистрировать команду\n"
-    text += "/rating — Посмотреть рейтинг\n"
-    text += "/help — Показать это сообщение\n\n"
-
-    # ✅ Если пользователь админ — добавляем блок админских команд
-    from config import ADMIN_IDS
-    if user_id in ADMIN_IDS:
-        text += "🛠 *Для администраторов:*\n"
-        text += "/startgame — Запустить игру\n"
-        text += "/stopgame — Остановить игру\n"
-        text += "/resetgame — Сбросить игру\n"
-        text += "/broadcast <текст> — Сделать рассылку\n"
-        text += "/changeleader <old_id> <new_id> — Сменить лидера\n"
-        text += "/setadmin <пароль> — Получить права админа\n"
-        text += "/removeadmin — Убрать права админа\n"
-
-    await message.answer(text, parse_mode="Markdown")
 
 # ✅ /start
 @router.message(Command("start"))
@@ -61,13 +34,13 @@ async def cmd_register(message: types.Message):
     waiting_for_team_name.add(message.from_user.id)
     await message.answer("Введите название вашей команды (одно сообщение):")
 
-# ✅ Обработка текстовых сообщений
+# ✅ Обработка текста (название команды или ответ)
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_text(message: types.Message):
     user_id = message.from_user.id
-    await message.delete()
+    await message.delete()  # ✅ Удаляем сообщение игрока
 
-    # ✅ Если ждём название команды
+    # ✅ Название команды
     if user_id in waiting_for_team_name:
         team_name = message.text.strip()
         if len(team_name) < 2:
@@ -75,20 +48,24 @@ async def handle_text(message: types.Message):
             return
 
         async with excel_lock:
-            add_participant(user_id, message.from_user.username, team_name)
+            add_participant(user_id, message.from_user.username, team_name, status="wait")
 
         waiting_for_team_name.remove(user_id)
         await message.answer(f"✅ Команда '{team_name}' зарегистрирована! Ждите старта.")
         return
 
-    # ✅ Если игрок не зарегистрирован
+    # ✅ Проверка регистрации
     if not user_exists(user_id):
         await message.answer("Вы ещё не зарегистрированы. Введите /register.")
         return
 
     # ✅ Проверка статуса
     status = str(get_status(user_id))
-    if status in ["0", "", None]:
+
+    if status == "wait":
+        await message.answer("Ожидайте начала квеста...")
+        return
+    elif status == "finished":
         await message.answer("Вы уже завершили квест! Ждите итогов.")
         return
 
@@ -109,25 +86,26 @@ async def process_answer(message: types.Message):
     if answer in q_data["answers"]:
         update_score(user_id, q_data["price"])
 
-        # Обновляем старое сообщение (верный ответ)
+        # ✅ Обновляем сообщение
         await send_question(message.bot, user_id, status, "🟢 Ответ принят 🟢", state_update=False, disable_buttons=True)
 
+        # ✅ Последний вопрос
         if status >= q_data["max_q"]:
             set_end_time(user_id)
-            update_status(user_id, 0)  # ✅ Статус = завершено
+            update_status(user_id, "finished")
             if user_id in active_states:
                 del active_states[user_id]
             await message.bot.send_message(user_id, "🎉 Вы завершили квест! Спасибо за участие.")
             return
 
-        # Следующий вопрос
+        # ✅ Следующий вопрос
         update_status(user_id, status + 1)
         init_player_state(user_id)
         await send_question(message.bot, user_id, status + 1, "")
     else:
         await send_question(message.bot, user_id, status, "🔴 Ответ не верный 🔴", state_update=False)
 
-# ✅ /rating
+# ✅ /rating — рейтинг
 @router.message(Command("rating"))
 async def cmd_rating(message: types.Message):
     title = get_quest_title()
@@ -138,12 +116,33 @@ async def cmd_rating(message: types.Message):
         text += f"{i}. {p[3]} — {p[4]}💎 (+{p[7]} за ⌛)\n"
     await message.answer(text)
 
-# ✅ Отправка или обновление вопроса
+# ✅ /help — список команд
+@router.message(Command("help"))
+async def cmd_help(message: types.Message):
+    text = "📋 *Доступные команды:*\n\n"
+    text += "👤 *Для игроков:*\n"
+    text += "/start — Начать работу с ботом\n"
+    text += "/register — Зарегистрировать команду\n"
+    text += "/rating — Посмотреть рейтинг\n"
+    text += "/help — Показать это сообщение\n\n"
+
+    if message.from_user.id in ADMIN_IDS:
+        text += "🛠 *Для администраторов:*\n"
+        text += "/startgame — Запустить игру\n"
+        text += "/stopgame — Остановить игру\n"
+        text += "/resetgame — Сбросить игру\n"
+        text += "/broadcast <текст> — Сделать рассылку\n"
+        text += "/changeleader <old_id> <new_id> — Сменить лидера\n"
+        text += "/removeadmin — Снять права админа\n"
+
+    await message.answer(text, parse_mode="Markdown")
+
+# ✅ Отправка вопроса
 async def send_question(bot: Bot, user_id: int, question_num: int, status_text: str = "", state_update=True, disable_buttons=False):
     data = get_question_data(question_num)
     if not data:
         set_end_time(user_id)
-        update_status(user_id, 0)
+        update_status(user_id, "finished")
         await bot.send_message(user_id, "✅ Квест завершён! Спасибо за участие.")
         return
 
@@ -163,7 +162,7 @@ async def send_question(bot: Bot, user_id: int, question_num: int, status_text: 
         msg = await bot.send_message(user_id, text, reply_markup=kb)
         set_message_id(user_id, msg.message_id)
 
-# ✅ Формат вопроса
+# ✅ Форматирование текста вопроса
 def format_question_message(q_num, data, status_text, state):
     text = f"❓ Вопрос №{q_num}\n"
     if status_text:
@@ -182,7 +181,7 @@ def format_question_message(q_num, data, status_text, state):
 
     return text
 
-# ✅ Inline: подсказка
+# ✅ Обработка подсказки
 @router.callback_query(F.data.startswith("hint_"))
 async def use_hint(callback: types.CallbackQuery, bot: Bot):
     hint_idx = int(callback.data.split("_")[1])
@@ -195,12 +194,11 @@ async def use_hint(callback: types.CallbackQuery, bot: Bot):
     await send_question(bot, callback.from_user.id, int(status), "💡 Вы взяли подсказку", state_update=False)
     await callback.answer()
 
-# ✅ Inline: пропуск
+# ✅ Обработка пропуска
 @router.callback_query(F.data == "skip")
 async def skip_question(callback: types.CallbackQuery, bot: Bot):
     status = get_status(callback.from_user.id)
 
-    # ✅ Обновляем старое сообщение
     await send_question(bot, callback.from_user.id, int(status), "🎟️ Вопрос пропущен 🎟️", state_update=False, disable_buttons=True)
 
     update_score(callback.from_user.id, -SKIP_PENALTY)
@@ -208,6 +206,5 @@ async def skip_question(callback: types.CallbackQuery, bot: Bot):
     init_player_state(callback.from_user.id)
     update_status(callback.from_user.id, next_q)
 
-    # ✅ Новый вопрос
     await send_question(bot, callback.from_user.id, next_q, "")
     await callback.answer()

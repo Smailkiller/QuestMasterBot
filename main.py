@@ -2,41 +2,32 @@
 import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
-from config import TOKEN, ADMIN_IDS
+from config import TOKEN
 from handlers import user, admin
 
-async def set_default_commands(bot: Bot):
-    """Устанавливаем базовые команды для всех пользователей"""
+# ✅ Функция для установки стандартных команд
+async def set_default_commands(bot: Bot, user_id: int = None):
     commands = [
         BotCommand(command="start", description="Начать работу с ботом"),
         BotCommand(command="register", description="Зарегистрировать команду"),
         BotCommand(command="rating", description="Посмотреть рейтинг"),
         BotCommand(command="help", description="Список команд"),
     ]
-    await bot.set_my_commands(commands)
-
-async def set_admin_commands(bot: Bot, admin_id: int):
-    """Устанавливаем команды для администратора"""
-    admin_commands = [
-        BotCommand(command="startgame", description="Запустить игру"),
-        BotCommand(command="stopgame", description="Остановить игру"),
-        BotCommand(command="resetgame", description="Сбросить игру"),
-        BotCommand(command="broadcast", description="Сделать рассылку"),
-        BotCommand(command="changeleader", description="Сменить лидера"),
-        BotCommand(command="help", description="Список команд"),
-    ]
-    await bot.set_my_commands(admin_commands, scope={"type": "chat", "chat_id": admin_id})
+    if user_id:
+        await bot.set_my_commands(commands, scope={"type": "chat", "chat_id": user_id})
+    else:
+        await bot.set_my_commands(commands)
 
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher()
 
-    # ✅ Устанавливаем базовые команды для всех пользователей
+    # ✅ Устанавливаем команды по умолчанию для всех
     await set_default_commands(bot)
 
-    # ✅ Регистрируем роутеры
-    dp.include_router(admin.router)
+    # ✅ Регистрируем обработчики
     dp.include_router(user.router)
+    dp.include_router(admin.router)
 
     print("✅ Бот запущен!")
     await dp.start_polling(bot)

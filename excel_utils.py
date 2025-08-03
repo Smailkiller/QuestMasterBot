@@ -16,12 +16,24 @@ def user_exists(user_id):
     wb.close()
     return False
 
-def add_participant(user_id, username, team_name):
-    wb = load_excel()
+def add_participant(user_id, username, team_name, status="wait"):
+    wb = load_workbook(EXCEL_FILE)
     ws = wb["Участники"]
-    ws.append(["0", user_id, username, team_name, START_SCORE, "", "", 0])
+
+    # Поиск следующей свободной строки
+    row = ws.max_row + 1
+
+    ws.cell(row=row, column=1, value=status)  # Статус
+    ws.cell(row=row, column=2, value=user_id)
+    ws.cell(row=row, column=3, value=username)
+    ws.cell(row=row, column=4, value=team_name)
+    ws.cell(row=row, column=5, value=10)  # Баллы по умолчанию
+    ws.cell(row=row, column=6, value="")  # Время старта
+    ws.cell(row=row, column=7, value="")  # Время окончания
+    ws.cell(row=row, column=8, value=0)   # Бонус за скорость
+
     wb.save(EXCEL_FILE)
-    wb.close()
+
 
 def get_participants():
     wb = load_excel()
